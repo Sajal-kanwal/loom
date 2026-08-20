@@ -1,10 +1,11 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ArrowRight, Sparkles, TrendingUp, ShieldAlert, Cpu, BarChart2 } from 'lucide-react'
 
 import { LogoMark } from '@/components/Logo'
 import { Badge } from '@/components/ui/badge'
 import { useThreads } from '@/hooks/useThreads'
+import { animateStaggerEntrance } from '@/lib/animations'
 import { RESEARCH_PROMPTS } from '@/lib/suggestions'
 import { cn } from '@/lib/utils'
 
@@ -23,12 +24,20 @@ export function ChatEmptyPage() {
   const { createNewThread } = useThreads()
   const [isStarting, setIsStarting] = useState(false)
   const [selectedTicker, setSelectedTicker] = useState<string>('ALL')
+  const cardsContainerRef = useRef<HTMLDivElement>(null)
 
   const filteredPrompts = useMemo(() => {
     if (selectedTicker === 'ALL') return RESEARCH_PROMPTS
     return RESEARCH_PROMPTS.filter(
       (p) => p.ticker === selectedTicker || p.ticker === 'ALL',
     )
+  }, [selectedTicker])
+
+  useEffect(() => {
+    if (cardsContainerRef.current) {
+      const cards = cardsContainerRef.current.querySelectorAll<HTMLElement>('.prompt-card')
+      animateStaggerEntrance(cards)
+    }
   }, [selectedTicker])
 
   async function startConversation(prompt: string) {
@@ -77,7 +86,7 @@ export function ChatEmptyPage() {
       </div>
 
       {/* Prompt Cards Grid */}
-      <div className="grid w-full gap-2.5 sm:grid-cols-2">
+      <div ref={cardsContainerRef} className="grid w-full gap-2.5 sm:grid-cols-2">
         {filteredPrompts.slice(0, 6).map((item) => {
           const Icon = CATEGORY_ICONS[item.category] || Sparkles
           return (
@@ -86,7 +95,7 @@ export function ChatEmptyPage() {
               type="button"
               disabled={isStarting}
               onClick={() => void startConversation(item.prompt)}
-              className="group flex flex-col justify-between gap-2.5 rounded-xl border border-border/70 bg-card/50 p-4 text-left shadow-2xs transition-all hover:border-border hover:bg-muted/40 hover:shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="prompt-card group flex flex-col justify-between gap-2.5 rounded-xl border border-border/70 bg-card/50 p-4 text-left shadow-2xs transition-all hover:border-border hover:bg-muted/40 hover:shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-1.5">

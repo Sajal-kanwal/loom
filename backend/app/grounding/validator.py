@@ -101,24 +101,73 @@ class OpenAIGroundingJudge:
         return parsed.decisions
 
 
+def normalize_citation_markers(text: str) -> str:
+    def repl(m: re.Match) -> str:
+        parts = [p.strip() for p in m.group(1).split(",") if p.strip().isdigit()]
+        if len(parts) > 1:
+            return " ".join(f"[{p}]" for p in parts)
+        return m.group(0)
+    return re.sub(r"\[([\d\s,]+)\]", repl, text)
+
+
 def _citation_markers(text: str) -> set[int]:
-    return {int(match.group(1)) for match in _CITATION_MARKER_RE.finditer(text)}
+    indices: set[int] = set()
+    for match in re.finditer(r"\[([\d\s,]+)\]", text):
+        content = match.group(1)
+        for part in content.split(","):
+            part_str = part.strip()
+            if part_str.isdigit():
+                indices.add(int(part_str))
+    return indices
 
 
 def prune_unreferenced_citations(answer: GroundedAnswer) -> GroundedAnswer:
-    marker_indices = _citation_markers(answer.answer)
-    if not marker_indices:
-        return answer
+    normalized_text = normalize_citation_markers(answer.answer)
+    valid_citation_indices = {c.citation_index for c in answer.citations}
 
+    # Remove any marker [k] from text where k is not in answer.citations
+    def filter_dangling(m: re.Match) -> str:
+        idx = int(m.group(1))
+        return m.group(0) if idx in valid_citation_indices else ""
+
+    cleaned_text = re.sub(r"\[(\d+)\]", filter_dangling, normalized_text)
+    cleaned_text = re.sub(r"[ \t]+", " ", cleaned_text)
+
+    marker_indices = _citation_markers(cleaned_text)
     citations = [
-        citation
-        for citation in answer.citations
-        if citation.citation_index in marker_indices
+        c for c in answer.citations if c.citation_index in marker_indices
     ]
-    if len(citations) == len(answer.citations):
-        return answer
 
-    return answer.model_copy(update={"citations": citations})
+    if citations:
+        old_to_new = {
+            c.citation_index: new_idx
+            for new_idx, c in enumerate(citations, start=1)
+        }
+
+        def reindex(m: re.Match) -> str:
+            idx = int(m.group(1))
+            return f"[{old_to_new[idx]}]" if idx in old_to_new else ""
+
+        final_text = re.sub(r"\[(\d+)\]", reindex, cleaned_text)
+        reindexed_citations = [
+            c.model_copy(update={"citation_index": old_to_new[c.citation_index]})
+            for c in citations
+        ]
+        return answer.model_copy(
+            update={
+                "answer": final_text,
+                "citations": reindexed_citations,
+                "insufficient_evidence": False,
+            }
+        )
+
+    return answer.model_copy(
+        update={
+            "answer": cleaned_text,
+            "citations": [],
+            "insufficient_evidence": answer.insufficient_evidence,
+        }
+    )
 
 
 def _decision_indexes_match_cases(
