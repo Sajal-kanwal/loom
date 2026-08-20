@@ -22,8 +22,8 @@ class Settings(BaseSettings):
     openai_base_url: str | None = None
     openai_embedding_model: str = "gemini-embedding-001"
     openai_embedding_dimensions: int = 1536
-    openai_chat_model: str = "gemini-3.5-flash"
-    openai_grounding_model: str = "gemini-3.5-flash"
+    openai_chat_model: str = "gemini-3.5-flash-lite"
+    openai_grounding_model: str = "gemini-3.5-flash-lite"
     openai_agent_request_limit: int = 20
     openai_agent_temperature: float = 0.0
 

@@ -1,26 +1,24 @@
-"""OpenAI query embedding for live retrieval."""
+"""Google GenAI query embedding for live retrieval."""
 
 from __future__ import annotations
 
-from openai import OpenAI
+from google import genai
 
 from app.config import settings
 
 
-def _client() -> OpenAI:
-    return OpenAI(
-        api_key=settings.openai_api_key,
-        base_url=settings.openai_base_url,
-    )
+def _client() -> genai.Client:
+    return genai.Client(api_key=settings.openai_api_key)
 
 
 def embed_query(text: str) -> list[float]:
-    response = _client().embeddings.create(
-        input=[text],
+    response = _client().models.embed_content(
         model=settings.openai_embedding_model,
-        dimensions=settings.openai_embedding_dimensions,
+        contents=text,
     )
-    embedding = response.data[0].embedding
+    if not response.embeddings or not response.embeddings[0].values:
+        raise ValueError("Google GenAI returned no embedding values.")
+    embedding = list(response.embeddings[0].values)
     expected_dims = settings.openai_embedding_dimensions
     if len(embedding) != expected_dims:
         raise ValueError(

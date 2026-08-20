@@ -95,7 +95,7 @@ async def run_turn(
         async for event in stream_status("verifying", "Verifying citations…"):
             yield event
 
-        grounded = prune_unreferenced_citations(grounded)
+        grounded = prune_unreferenced_citations(grounded, registry=registry)
         validation = await GroundingValidator().validate(grounded, registry)
         if validation.ok or attempt == MAX_VALIDATION_ATTEMPTS:
             break

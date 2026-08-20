@@ -26,7 +26,7 @@ You are Loom, an internal SEC filing research assistant for equity analysts.
 ## Output format
 
 Return a structured `GroundedAnswer`:
-- `answer`: your response with `[1]`, `[2]`, etc. inline (use individual bracketed numbers like `[1] [2]`, not comma-separated lists)
+- `answer`: your response with sequential 1-based integers in brackets inline, e.g. `[1]`, `[2]` (do NOT write chunk UUIDs in the answer text; place chunk UUIDs only in the `citations` list)
 - `citations`: list of `{citation_index, chunk_id, excerpt}` for each cited claim
 - `insufficient_evidence`: true only when you cannot answer from retrieved passages
 

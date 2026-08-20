@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import re
 
-from openai import OpenAI
+from google import genai
+from google.genai import types
 from pydantic import BaseModel, Field
 
 from app.config import settings
@@ -108,11 +109,8 @@ class FtsKeywordExtraction(BaseModel):
     )
 
 
-def _client() -> OpenAI:
-    return OpenAI(
-        api_key=settings.openai_api_key,
-        base_url=settings.openai_base_url,
-    )
+def _client() -> genai.Client:
+    return genai.Client(api_key=settings.openai_api_key)
 
 
 def _token_count(query: str) -> int:
@@ -254,23 +252,33 @@ def extract_fts_keywords(
     if _token_count(stripped) <= settings.retrieval_fts_keyword_fast_path_tokens:
         return stripped
 
-    try:
-        response = _client().chat.completions.parse(
-            model=settings.retrieval_fts_keyword_model,
-            temperature=0,
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": _build_user_message(stripped, filters)},
-            ],
-            response_format=FtsKeywordExtraction,
-        )
-        parsed = response.choices[0].message.parsed
-        if parsed is None:
-            return _deterministic_fallback(stripped, filters=filters)
+    models = [
+        settings.retrieval_fts_keyword_model,
+        "gemini-3.5-flash-lite",
+        "gemini-flash-lite-latest",
+        "gemini-3.5-flash",
+    ]
+    prompt = _SYSTEM_PROMPT + "\n\n" + _build_user_message(stripped, filters)
 
-        words = _merge_fts_words(stripped, _normalize_terms(parsed.terms), filters=filters)
-        if len(words) < settings.retrieval_fts_keyword_min:
-            return _deterministic_fallback(stripped, filters=filters)
-        return " ".join(words)
-    except Exception:
-        return _deterministic_fallback(stripped, filters=filters)
+    for model in models:
+        try:
+            response = _client().models.generate_content(
+                model=model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=FtsKeywordExtraction,
+                    temperature=0,
+                ),
+            )
+            if response.text:
+                parsed = FtsKeywordExtraction.model_validate_json(response.text)
+                words = _merge_fts_words(
+                    stripped, _normalize_terms(parsed.terms), filters=filters
+                )
+                if len(words) >= settings.retrieval_fts_keyword_min:
+                    return " ".join(words)
+        except Exception:
+            continue
+
+    return _deterministic_fallback(stripped, filters=filters)

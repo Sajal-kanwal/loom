@@ -8,7 +8,8 @@ import re
 from dataclasses import dataclass
 from typing import Protocol
 
-from openai import OpenAI
+from google import genai
+from google.genai import types
 from pydantic import BaseModel, Field
 
 from app.assistant.deps import TurnRegistry
@@ -49,7 +50,7 @@ class CitationGroundingCase(BaseModel):
 class CitationGroundingDecision(BaseModel):
     citation_index: int
     supported: bool
-    reason: str = Field(description="Short reason for the grounding decision")
+    reason: str
 
 
 class CitationGroundingDecisionList(BaseModel):
@@ -63,12 +64,9 @@ class GroundingJudge(Protocol):
     ) -> list[CitationGroundingDecision]: ...
 
 
-class OpenAIGroundingJudge:
+class GeminiGroundingJudge:
     def __init__(self) -> None:
-        self._client = OpenAI(
-            api_key=settings.openai_api_key,
-            base_url=settings.openai_base_url,
-        )
+        self._client = genai.Client(api_key=settings.openai_api_key)
 
     async def judge(
         self,
@@ -80,25 +78,104 @@ class OpenAIGroundingJudge:
         self,
         cases: list[CitationGroundingCase],
     ) -> list[CitationGroundingDecision]:
-        response = self._client.chat.completions.parse(
-            model=settings.openai_grounding_model,
-            temperature=0,
-            messages=[
-                {"role": "system", "content": _GROUNDING_JUDGE_SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {"cases": [case.model_dump(mode="json") for case in cases]},
-                        separators=(",", ":"),
-                    ),
-                },
-            ],
-            response_format=CitationGroundingDecisionList,
+        models = [
+            settings.openai_grounding_model,
+            "gemini-3.5-flash-lite",
+            "gemini-flash-lite-latest",
+            "gemini-3.5-flash",
+        ]
+        prompt = (
+            _GROUNDING_JUDGE_SYSTEM_PROMPT
+            + "\n\nCases to evaluate:\n"
+            + json.dumps(
+                {"cases": [case.model_dump(mode="json") for case in cases]},
+                separators=(",", ":"),
+            )
         )
-        parsed = response.choices[0].message.parsed
-        if parsed is None:
-            raise ValueError("Grounding judge returned no parsed decision.")
-        return parsed.decisions
+        last_error: Exception | None = None
+        for model in models:
+            try:
+                response = self._client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=CitationGroundingDecisionList,
+                        temperature=0,
+                    ),
+                )
+                if response.text:
+                    parsed = CitationGroundingDecisionList.model_validate_json(
+                        response.text
+                    )
+                    return parsed.decisions
+            except Exception as exc:
+                last_error = exc
+                continue
+
+        if last_error:
+            raise last_error
+        raise ValueError("Grounding judge returned no parsed decision.")
+
+
+_UUID_RE = re.compile(
+    r"\[([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\]"
+)
+
+
+def _convert_uuid_markers_to_indices(
+    answer: GroundedAnswer, registry: TurnRegistry | None = None
+) -> GroundedAnswer:
+    text = answer.answer
+    uuid_matches = list(_UUID_RE.finditer(text))
+    if not uuid_matches:
+        return answer
+
+    citations = list(answer.citations)
+    citations_by_chunk_id = {c.chunk_id: c for c in citations}
+
+    uuid_to_index: dict[str, int] = {}
+    next_idx = 1
+    new_citations: list[Citation] = []
+
+    for match in uuid_matches:
+        uuid_str = match.group(1)
+        if uuid_str in uuid_to_index:
+            continue
+        try:
+            chunk_uuid = UUID(uuid_str)
+        except ValueError:
+            continue
+
+        uuid_to_index[uuid_str] = next_idx
+
+        if chunk_uuid in citations_by_chunk_id:
+            existing = citations_by_chunk_id[chunk_uuid]
+            new_citations.append(
+                existing.model_copy(update={"citation_index": next_idx})
+            )
+        elif registry and chunk_uuid in registry.passages_by_chunk_id:
+            p = registry.passages_by_chunk_id[chunk_uuid]
+            new_citations.append(
+                Citation(
+                    citation_index=next_idx,
+                    chunk_id=chunk_uuid,
+                    excerpt=p.text[:300],
+                )
+            )
+        next_idx += 1
+
+    if uuid_to_index:
+        def repl(m: re.Match) -> str:
+            u = m.group(1)
+            return f"[{uuid_to_index[u]}]" if u in uuid_to_index else ""
+
+        converted_text = _UUID_RE.sub(repl, text)
+        return answer.model_copy(
+            update={"answer": converted_text, "citations": new_citations}
+        )
+
+    return answer
 
 
 def normalize_citation_markers(text: str) -> str:
@@ -121,7 +198,10 @@ def _citation_markers(text: str) -> set[int]:
     return indices
 
 
-def prune_unreferenced_citations(answer: GroundedAnswer) -> GroundedAnswer:
+def prune_unreferenced_citations(
+    answer: GroundedAnswer, registry: TurnRegistry | None = None
+) -> GroundedAnswer:
+    answer = _convert_uuid_markers_to_indices(answer, registry=registry)
     normalized_text = normalize_citation_markers(answer.answer)
     valid_citation_indices = {c.citation_index for c in answer.citations}
 
@@ -262,7 +342,7 @@ class GroundingValidator:
             )
 
         try:
-            judge = self._judge or OpenAIGroundingJudge()
+            judge = self._judge or GeminiGroundingJudge()
             decisions = await _judge_with_index_repair(judge, cases)
         except Exception as exc:
             return ValidationResult(
