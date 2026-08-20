@@ -5,7 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from pydantic_ai import Agent, UsageLimits
+from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.assistant.deps import DocumentAgentDeps
@@ -28,13 +30,19 @@ _document_agent: Agent[DocumentAgentDeps, GroundedAnswer] | None = None
 def get_document_agent() -> Agent[DocumentAgentDeps, GroundedAnswer]:
     global _document_agent
     if _document_agent is None:
-        model = OpenAIChatModel(
-            settings.openai_chat_model,
-            provider=OpenAIProvider(
-                api_key=settings.openai_api_key,
-                base_url=settings.openai_base_url,
-            ),
-        )
+        if settings.openai_chat_model.startswith("gemini"):
+            model = GoogleModel(
+                settings.openai_chat_model,
+                provider=GoogleProvider(api_key=settings.openai_api_key),
+            )
+        else:
+            model = OpenAIChatModel(
+                settings.openai_chat_model,
+                provider=OpenAIProvider(
+                    api_key=settings.openai_api_key,
+                    base_url=settings.openai_base_url,
+                ),
+            )
         _document_agent = Agent(
             model,
             deps_type=DocumentAgentDeps,
