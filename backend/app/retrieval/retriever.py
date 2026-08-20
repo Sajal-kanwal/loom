@@ -67,8 +67,15 @@ class DocumentRetriever:
         with ThreadPoolExecutor(max_workers=2) as prep:
             embed_future = prep.submit(embed_query, query)
             kw_future = prep.submit(extract_fts_keywords, query, filters=filters)
-            query_vec = embed_future.result()
-            fts_query = kw_future.result()
+            try:
+                query_vec: list[float] | None = embed_future.result()
+            except Exception:
+                query_vec = None
+
+            try:
+                fts_query: str = kw_future.result()
+            except Exception:
+                fts_query = query
 
         semantic_hits, fts_hits = _dual_search(
             query_vec,
@@ -79,8 +86,12 @@ class DocumentRetriever:
 
         semantic_ids = [hit.chunk_id for hit in semantic_hits]
         fts_ids = [hit.chunk_id for hit in fts_hits]
+        rank_lists = [l for l in [semantic_ids, fts_ids] if l]
+        if not rank_lists:
+            return []
+
         fused = reciprocal_rank_fusion(
-            [semantic_ids, fts_ids],
+            rank_lists,
             k=settings.retrieval_rrf_k,
         )[:top_k]
 
@@ -93,28 +104,26 @@ class DocumentRetriever:
 
         passages: list[RetrievedPassage] = []
         seen_neighbor_ids: set[UUID] = set(fused_ids)
-
         for chunk_id in fused_ids:
             chunk = chunks_by_id.get(chunk_id)
-            if chunk is None or chunk.document is None:
+            if chunk is None:
                 continue
 
             neighbors: list[RetrievedPassage] = []
             if include_neighbors:
-                for neighbor_chunk in get_surrounding_chunks(
+                neighbor_records = get_surrounding_chunks(
                     session,
                     chunk_id,
                     settings.retrieval_neighbor_radius,
-                ):
-                    if neighbor_chunk.id in seen_neighbor_ids:
+                )
+                for n in neighbor_records:
+                    if n.id in seen_neighbor_ids:
                         continue
-                    if neighbor_chunk.document is None:
-                        continue
-                    seen_neighbor_ids.add(neighbor_chunk.id)
+                    seen_neighbor_ids.add(n.id)
                     neighbors.append(
                         _passage_from_chunk(
-                            neighbor_chunk,
-                            neighbor_chunk.document,
+                            n,
+                            n.document,
                             fusion_score=0.0,
                         )
                     )
@@ -132,7 +141,7 @@ class DocumentRetriever:
 
 
 def _dual_search(
-    query_vec: list[float],
+    query_vec: list[float] | None,
     fts_query: str,
     *,
     candidate_k: int,
@@ -141,6 +150,8 @@ def _dual_search(
     """Run semantic and full-text search in parallel (separate DB sessions)."""
 
     def semantic() -> list[RankedChunkHit]:
+        if query_vec is None:
+            return []
         with get_session() as search_session:
             return semantic_search(
                 search_session,
