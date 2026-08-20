@@ -1,5 +1,4 @@
 import os
-import pytest
 
 # Ensure required environment variables exist during testing
 os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
