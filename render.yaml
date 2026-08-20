@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: loom-backend
+    runtime: docker
+    dockerfilePath: backend/Dockerfile
+    dockerContext: backend
+    plan: free
+    region: oregon
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_BASE_URL
+        value: https://generativelanguage.googleapis.com/v1beta/openai/
+      - key: OPENAI_CHAT_MODEL
+        value: gemini-3.5-flash-lite
+      - key: OPENAI_GROUNDING_MODEL
+        value: gemini-3.5-flash-lite
+      - key: OPENAI_EMBEDDING_MODEL
+        value: gemini-embedding-001
+      - key: OPENAI_EMBEDDING_DIMENSIONS
+        value: "1536"
+      - key: ALLOWED_ORIGINS
+        value: "*"
